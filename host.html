@@ -1,0 +1,818 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sky Aim — จอ Host</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="host-body">
+  <div id="scene"></div>
+
+  <!-- เป้าเล็ง + วงแหวนความคืบหน้าการค้างเป้า -->
+  <div id="crosshair">
+    <svg viewBox="-60 -60 120 120">
+      <circle r="34" fill="none" stroke="rgba(255,255,255,.25)" stroke-width="5"/>
+      <circle id="dwellRing" r="34" fill="none" stroke="#ffd56b" stroke-width="5" stroke-linecap="round"
+              transform="rotate(-90)" stroke-dasharray="0 214" />
+      <circle id="tolRing" r="20" fill="none" stroke="rgba(255,255,255,.35)" stroke-width="1" stroke-dasharray="3 4"/>
+      <line x1="-12" y1="0" x2="-4" y2="0" stroke="#fff" stroke-width="2"/>
+      <line x1="4" y1="0" x2="12" y2="0" stroke="#fff" stroke-width="2"/>
+      <line x1="0" y1="-12" x2="0" y2="-4" stroke="#fff" stroke-width="2"/>
+      <line x1="0" y1="4" x2="0" y2="12" stroke="#fff" stroke-width="2"/>
+    </svg>
+  </div>
+  <div id="hintDist" class="hidden"></div>
+  <div id="banner"></div>
+
+  <!-- HUD -->
+  <div id="stats" class="hud panel">
+    <span class="lbl">คะแนน</span><b id="hudScore">0</b>
+    <span class="lbl">เวลา</span><span><span id="hudTime">0.0</span> วิ <span class="muted" id="hudBonus"></span></span>
+    <span class="lbl">ข้อที่</span><span id="hudQ">–</span>
+    <span class="lbl">ด่าน</span><span id="hudLevel">–</span>
+  </div>
+
+  <div id="qcard" class="hud panel">
+    <div class="lvl" id="qLevel">Sky Aim</div>
+    <div class="prompt" id="qPrompt">หันกล้องสำรวจท้องฟ้าได้เลย</div>
+    <div class="sub" id="qSub">ลากเมาส์ / ปุ่มลูกศร / เอียงมือถือ</div>
+    <div id="readout" class="mono"></div>
+  </div>
+
+  <div id="roominfo" class="hud panel">
+    <div class="muted">ห้อง</div>
+    <div class="code" id="roomSmall">----</div>
+    <div class="muted" id="phoneCount">มือถือ 0 เครื่อง</div>
+    <div id="phones"></div>
+    <div id="conn" class="muted">กำลังเชื่อมต่อ…</div>
+  </div>
+
+  <div id="controls" class="hud">
+    <button class="btn pe" id="hintBtn">💡 คำใบ้ (−40)</button>
+    <button class="btn pe warn" id="skipBtn">⏭ ข้าม</button>
+    <button class="btn pe" id="formulaBtn">📐 สูตร</button>
+  </div>
+
+  <div id="keyshelp" class="hud panel">
+    ลากเมาส์ หรือ ←↑→↓ (Shift = ละเอียด) · H คำใบ้ · S ข้าม · Enter ถัดไป · F สูตร
+  </div>
+
+  <div id="formulas" class="hud panel hidden">
+    <h3>📐 สูตรแปลงพิกัด</h3>
+    <div class="muted" style="font-size:13px">θ วัดบนระนาบ xy จากแกน +x ทวนเข็มไปทาง +y<br>φ วัดจากแกน +z (จุดยอดฟ้า) ลงมา</div>
+    <div><b>ทรงกลม → ฉาก</b></div>
+    <div class="f">x = r sin φ cos θ</div>
+    <div class="f">y = r sin φ sin θ</div>
+    <div class="f">z = r cos φ</div>
+    <div style="margin-top:6px"><b>ฉาก → ทรงกลม</b></div>
+    <div class="f">r = √(x² + y² + z²)</div>
+    <div class="f">θ = atan2(y, x)</div>
+    <div class="f">φ = arccos(z / r)</div>
+    <div class="muted" style="font-size:13px;margin-top:6px">π rad = 180° · ขอบฟ้าคือ φ = 90°</div>
+  </div>
+
+  <div id="solution" class="hud panel pe hidden">
+    <h2 id="solTitle"></h2>
+    <div class="pts" id="solPts"></div>
+    <ol id="solSteps"></ol>
+    <div class="row">
+      <span class="muted" id="solCountdown"></span>
+      <button class="btn primary" id="nextBtn">ข้อต่อไป ▶</button>
+    </div>
+  </div>
+
+  <!-- Lobby -->
+  <div id="lobby" class="overlay">
+    <div class="card">
+      <div class="lobby-grid">
+        <div>
+          <div class="muted">รหัสห้อง</div>
+          <div class="lobby-code" id="roomBig">----</div>
+          <div class="joinurl" id="joinUrl"></div>
+          <div class="devstatus" id="devStatus">📱 ยังไม่มีมือถือเชื่อมต่อ</div>
+          <div id="localWarn" class="warnbox hidden">
+            ⚠️ ตอนนี้เปิดจอ Host ผ่าน <b>localhost</b> — มือถือเข้า localhost ของคอมเครื่องนี้ไม่ได้
+            (QR code จะใช้ไม่ได้) และเซนเซอร์ต้องใช้ HTTPS ควรเปิดผ่าน URL ที่ deploy แล้ว เช่น https://xxx.onrender.com
+          </div>
+          <ol class="howto">
+            <li>สแกน QR หรือเปิด <b>client.html</b> บนมือถือแล้วกรอกรหัส</li>
+            <li>กด “เปิดใช้เซนเซอร์” แล้วถือมือถือในท่าที่สบาย (ระบบตั้งศูนย์ให้)</li>
+            <li>เอียงซ้าย-ขวาเพื่อหัน เอียงเข้าหาตัวเพื่อเงย ค้างเป้าไว้ 1 วินาที</li>
+          </ol>
+          <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap">
+            <button class="btn primary" id="startBtn" style="font-size:22px;padding:14px 30px">▶ เริ่มเกม</button>
+          </div>
+        </div>
+        <div id="qr"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- End -->
+  <div id="endScreen" class="overlay hidden">
+    <div class="card">
+      <h1 style="margin:0">🌌 จบเกม!</h1>
+      <div class="muted">คะแนนรวม</div>
+      <div class="total" id="endTotal">0</div>
+      <table class="endtable">
+        <thead><tr><th>ข้อ</th><th>ด่าน</th><th>โจทย์</th><th>ผล</th><th class="num">คะแนน</th></tr></thead>
+        <tbody id="endRows"></tbody>
+      </table>
+      <button class="btn primary" id="againBtn" style="font-size:20px;padding:12px 26px">🔄 เล่นใหม่</button>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+  'use strict';
+  // =====================================================================
+  //  ยูทิลิตี้คณิตศาสตร์ — ใช้แกนแบบคณิตศาสตร์ (z ชี้ขึ้น)
+  // =====================================================================
+  const D2R = Math.PI / 180, R2D = 180 / Math.PI;
+  const $ = (id) => document.getElementById(id);
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const randInt = (a, b) => a + Math.floor(Math.random() * (b - a + 1));
+  const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+  const norm360 = (a) => ((a % 360) + 360) % 360;
+  const MINUS = '−';
+  const fmt = (n, d = 1) => { const s = Math.abs(n).toFixed(d); return (n < 0 && Number(s) !== 0 ? MINUS : '') + s; };
+  const fint = (n) => (n < 0 ? MINUS + Math.abs(n) : String(n));
+  const par = (n) => (n < 0 ? '(' + fint(n) + ')' : String(n));
+  const gcd = (a, b) => (b ? gcd(b, a % b) : Math.abs(a));
+
+  /** ทิศหนึ่งหน่วยจาก (θ°, φ°) */
+  function sph2vec(thDeg, phDeg) {
+    const t = thDeg * D2R, p = phDeg * D2R;
+    return { x: Math.sin(p) * Math.cos(t), y: Math.sin(p) * Math.sin(t), z: Math.cos(p) };
+  }
+  /** แกนคณิต (x, y, z; z ขึ้น) → แกน Three.js (y ขึ้น): (x, z, −y) ยังเป็นระบบมือขวา */
+  const toThree = (v, r = 1) => new THREE.Vector3(v.x * r, v.z * r, -v.y * r);
+  const angBetween = (a, b) => Math.acos(clamp(a.x * b.x + a.y * b.y + a.z * b.z, -1, 1)) * R2D;
+
+  /** มุม (องศา) → สตริงพหุคูณของ π เช่น 150 → "5π/6" */
+  function fracPi(deg) {
+    if (deg === 0) return '0';
+    const g = gcd(deg, 180), n = deg / g, d = 180 / g;
+    const head = n === 1 ? 'π' : n + 'π';
+    return d === 1 ? head : head + '/' + d;
+  }
+  const COS_EXACT = { 0: '1', 30: '√3/2', 45: '√2/2', 60: '1/2', 90: '0', 120: MINUS + '1/2', 135: MINUS + '√2/2', 150: MINUS + '√3/2',
+    180: MINUS + '1', 210: MINUS + '√3/2', 225: MINUS + '√2/2', 240: MINUS + '1/2', 270: '0', 300: '1/2', 315: '√2/2', 330: '√3/2' };
+  const cosExact = (d) => COS_EXACT[norm360(d)];
+  const sinExact = (d) => COS_EXACT[norm360(90 - d)];
+  const wrapP = (s) => (s.startsWith(MINUS) ? '(' + s + ')' : s);
+
+  // =====================================================================
+  //  ฉาก Three.js
+  // =====================================================================
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setSize(innerWidth, innerHeight);
+  $('scene').appendChild(renderer.domElement);
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x030612);
+  const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.1, 500);
+
+  const R_SKY = 130, R_BGSTAR = 115, R_GRID = 100, R_GROUND = 95, R_LABEL = 86, R_FOUND = 80;
+
+  // โดมท้องฟ้าไล่สี
+  (function sky() {
+    const geo = new THREE.SphereGeometry(R_SKY, 48, 24);
+    const pos = geo.attributes.position, cols = [];
+    const zen = new THREE.Color(0x02040d), hor = new THREE.Color(0x182a5c), c = new THREE.Color();
+    for (let i = 0; i < pos.count; i++) {
+      const h = pos.getY(i) / R_SKY; // -1..1
+      c.copy(hor).lerp(zen, clamp(Math.abs(h) * 1.4, 0, 1));
+      cols.push(c.r, c.g, c.b);
+    }
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
+    const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors: true, side: THREE.BackSide, depthWrite: false }));
+    m.renderOrder = 0;
+    scene.add(m);
+  })();
+
+  // ดาวพื้นหลัง
+  (function bgStars() {
+    for (const [count, size] of [[2600, 1.4], [500, 2.4], [80, 3.4]]) {
+      const pts = [], cols = [], c = new THREE.Color();
+      for (let i = 0; i < count; i++) {
+        const u = Math.random() * 2 - 1, a = Math.random() * Math.PI * 2, s = Math.sqrt(1 - u * u);
+        pts.push(s * Math.cos(a) * R_BGSTAR, u * R_BGSTAR, s * Math.sin(a) * R_BGSTAR);
+        c.setHSL(pick([0.6, 0.62, 0.12, 0.08, 0]), Math.random() * 0.5, 0.75 + Math.random() * 0.25);
+        cols.push(c.r, c.g, c.b);
+      }
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.Float32BufferAttribute(pts, 3));
+      g.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
+      const p = new THREE.Points(g, new THREE.PointsMaterial({ size, sizeAttenuation: false, vertexColors: true, transparent: true, opacity: 0.9, depthWrite: false }));
+      p.renderOrder = 1;
+      scene.add(p);
+    }
+  })();
+
+  function addLine(points, color, opacity, order = 2) {
+    const g = new THREE.BufferGeometry().setFromPoints(points);
+    const l = new THREE.Line(g, new THREE.LineBasicMaterial({ color, transparent: true, opacity, depthWrite: false }));
+    l.renderOrder = order;
+    scene.add(l);
+    return l;
+  }
+
+  // เส้นกริด θ/φ ทุก 30°
+  (function grid() {
+    for (let th = 0; th < 360; th += 30) {
+      const pts = [];
+      for (let ph = 0; ph <= 180; ph += 2) pts.push(toThree(sph2vec(th, ph), R_GRID));
+      const color = th === 0 || th === 180 ? 0xff6b6b : th === 90 || th === 270 ? 0x6be38a : 0x6f8fd8;
+      addLine(pts, color, th % 90 === 0 ? 0.55 : 0.28);
+    }
+    for (let ph = 30; ph <= 150; ph += 30) {
+      const pts = [];
+      for (let th = 0; th <= 360; th += 2) pts.push(toThree(sph2vec(th, ph), R_GRID));
+      addLine(pts, ph === 90 ? 0x9fd0ff : 0x6f8fd8, ph === 90 ? 0.6 : 0.28);
+    }
+  })();
+
+  // พื้นดินโปร่งแสงใต้ขอบฟ้า
+  (function ground() {
+    const geo = new THREE.SphereGeometry(R_GROUND, 64, 24, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2);
+    const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0x0b2a1d, transparent: true, opacity: 0.62, side: THREE.BackSide, depthWrite: false }));
+    m.renderOrder = 3;
+    scene.add(m);
+    const pts = [];
+    for (let th = 0; th <= 360; th += 2) pts.push(toThree(sph2vec(th, 90), R_GROUND - 0.5));
+    addLine(pts, 0x58d68d, 0.8, 3);
+  })();
+
+  // ป้ายข้อความ (sprite)
+  function makeLabel(text, { color = '#cfe0ff', size = 30, height = 3.2, bg = null, order = 4 } = {}) {
+    const c = document.createElement('canvas'), ctx = c.getContext('2d');
+    const font = `bold ${size}px Sarabun, "Noto Sans Thai", sans-serif`;
+    ctx.font = font;
+    const w = Math.ceil(ctx.measureText(text).width) + 20, h = size + 16;
+    c.width = w; c.height = h;
+    ctx.font = font;
+    if (bg) { ctx.fillStyle = bg; ctx.fillRect(0, 0, w, h); }
+    ctx.fillStyle = color; ctx.textBaseline = 'middle'; ctx.textAlign = 'center';
+    ctx.shadowColor = 'rgba(0,0,0,.8)'; ctx.shadowBlur = 6;
+    ctx.fillText(text, w / 2, h / 2 + 1);
+    const tex = new THREE.CanvasTexture(c);
+    tex.minFilter = THREE.LinearFilter;
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, transparent: true, depthWrite: false, depthTest: false }));
+    s.scale.set(height * w / h, height, 1);
+    s.renderOrder = order;
+    return s;
+  }
+  function placeLabel(text, th, ph, opts, r = R_LABEL) {
+    const s = makeLabel(text, opts);
+    s.position.copy(toThree(sph2vec(th, ph), r));
+    scene.add(s);
+    return s;
+  }
+  (function labels() {
+    for (let th = 0; th < 360; th += 30) placeLabel(`θ=${th}°`, th, 94, { color: '#a9c4ff', size: 26, height: 2.6 });
+    for (const th of [15, 105, 195, 285]) {
+      for (const ph of [30, 60, 120, 150]) placeLabel(`φ=${ph}°`, th, ph, { color: '#8fb0e8', size: 24, height: 2.4 });
+    }
+    placeLabel('φ=90° (ขอบฟ้า)', 45, 88, { color: '#9fd0ff', size: 24, height: 2.4 });
+    placeLabel('+x', 0, 82, { color: '#ff7b7b', size: 44, height: 5 });
+    placeLabel(MINUS + 'x', 180, 82, { color: '#ff7b7b', size: 44, height: 5 });
+    placeLabel('+y', 90, 82, { color: '#7bea98', size: 44, height: 5 });
+    placeLabel(MINUS + 'y', 270, 82, { color: '#7bea98', size: 44, height: 5 });
+    const zl = makeLabel('+z', { color: '#7bb4ff', size: 44, height: 5 });
+    zl.position.set(0, R_LABEL, 0);
+    scene.add(zl);
+  })();
+
+  // พื้นผิว glow สำหรับดาว / วงคำใบ้
+  function radialTexture(stops) {
+    const c = document.createElement('canvas'); c.width = c.height = 128;
+    const ctx = c.getContext('2d'), g = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+    for (const [o, col] of stops) g.addColorStop(o, col);
+    ctx.fillStyle = g; ctx.fillRect(0, 0, 128, 128);
+    return new THREE.CanvasTexture(c);
+  }
+  const glowTex = radialTexture([[0, 'rgba(255,255,255,1)'], [0.12, 'rgba(255,255,255,0.95)'], [0.3, 'rgba(255,255,255,0.35)'], [1, 'rgba(255,255,255,0)']]);
+  const ringTex = (() => {
+    const c = document.createElement('canvas'); c.width = c.height = 128;
+    const ctx = c.getContext('2d');
+    ctx.strokeStyle = '#ff9ff0'; ctx.lineWidth = 8; ctx.shadowColor = '#ff6fe0'; ctx.shadowBlur = 12;
+    ctx.beginPath(); ctx.arc(64, 64, 48, 0, Math.PI * 2); ctx.stroke();
+    return new THREE.CanvasTexture(c);
+  })();
+  const hintSprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: ringTex, transparent: true, depthWrite: false, depthTest: false }));
+  hintSprite.scale.set(12, 12, 1);
+  hintSprite.renderOrder = 7;
+  hintSprite.visible = false;
+  scene.add(hintSprite);
+
+  // กลุ่มดาวที่ค้นพบแล้ว
+  const constellation = new THREE.Group();
+  scene.add(constellation);
+  function clearConstellation() {
+    while (constellation.children.length) {
+      const o = constellation.children.pop();
+      o.geometry && o.geometry.dispose();
+      if (o.material) { o.material.map && o.material.map !== glowTex && o.material.map.dispose(); o.material.dispose(); }
+    }
+  }
+  function addFoundStar(q, found, no) {
+    const color = found ? 0xffe7a3 : 0xff8a8a;
+    const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: glowTex, color, transparent: true, depthWrite: false, depthTest: false, blending: THREE.AdditiveBlending }));
+    s.position.copy(toThree(q.vec, R_FOUND));
+    s.scale.set(found ? 7 : 5, found ? 7 : 5, 1);
+    s.renderOrder = 6;
+    s.userData.born = performance.now();
+    s.userData.base = found ? 7 : 5;
+    constellation.add(s);
+    const lab = makeLabel('★' + no, { color: found ? '#ffe7a3' : '#ff9a9a', size: 26, height: 2.4, order: 6 });
+    lab.position.copy(toThree(sph2vec(q.theta, q.phi - 3.5), R_FOUND));
+    constellation.add(lab);
+    const prev = S.foundVecs[S.foundVecs.length - 1];
+    if (prev && angBetween(prev, q.vec) < 178) {
+      const a = toThree(prev), b = toThree(q.vec), pts = [];
+      for (let i = 0; i <= 40; i++) pts.push(a.clone().lerp(b, i / 40).normalize().multiplyScalar(R_FOUND + 0.5));
+      const l = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts),
+        new THREE.LineBasicMaterial({ color: 0x9cc2ff, transparent: true, opacity: 0.75, depthWrite: false, depthTest: false }));
+      l.renderOrder = 5;
+      constellation.add(l);
+    }
+    S.foundVecs.push(q.vec);
+  }
+
+  // =====================================================================
+  //  ตัวสร้างโจทย์แต่ละด่าน
+  // =====================================================================
+  const PER_LEVEL = 4;
+  const LEVELS = [
+    { name: 'ด่าน 1 · อ่านมุม (θ, φ)', tol: 6, readout: 'angles', gen: genL1 },
+    { name: 'ด่าน 2 · จากจุด P(x, y, z) สู่ทิศ (θ, φ)', tol: 7, readout: 'angles', gen: genL2 },
+    { name: 'ด่าน 3 · (r, θ, φ) เรเดียน → (x, y, z)', tol: 7, readout: 'xyz', gen: genL3 },
+  ];
+  const TOTAL_Q = LEVELS.length * PER_LEVEL;
+
+  function genL1() {
+    const theta = 15 * randInt(0, 23), phi = 15 * randInt(2, 10);
+    const v = sph2vec(theta, phi);
+    return {
+      theta, phi,
+      prompt: `ดาวอยู่ที่ θ = ${theta}°, φ = ${phi}°`,
+      sub: 'ค่าบนจอแสดง (θ, φ) ของทิศที่เล็งอยู่',
+      answer: `θ = ${theta}°, φ = ${phi}°`,
+      steps: [
+        `θ = ${theta}° คือมุมบนระนาบ xy วัดจากแกน +x หมุนทวนเข็มนาฬิกาไปทาง +y → หันซ้าย-ขวาจนค่า θ บนจอ = ${theta}°`,
+        `φ = ${phi}° วัดจากแกน +z (จุดยอดฟ้า) ลงมา — ${phi < 90 ? `น้อยกว่า 90° จึงอยู่เหนือขอบฟ้า ${90 - phi}°` : phi > 90 ? `มากกว่า 90° จึงอยู่ใต้ขอบฟ้า ${phi - 90}°` : 'เท่ากับ 90° คือบนขอบฟ้าพอดี'}`,
+        `ทิศหนึ่งหน่วย: (sin φ cos θ, sin φ sin θ, cos φ) ≈ (${fmt(v.x, 3)}, ${fmt(v.y, 3)}, ${fmt(v.z, 3)})`,
+      ],
+    };
+  }
+
+  function genL2() {
+    let x, y, z, r2, phi;
+    for (;;) {
+      x = randInt(-6, 6); y = randInt(-6, 6); z = randInt(-5, 5);
+      if (x === 0 && y === 0) continue;
+      r2 = x * x + y * y + z * z;
+      phi = Math.acos(z / Math.sqrt(r2)) * R2D;
+      if (phi >= 20 && phi <= 160) break;
+    }
+    const r = Math.sqrt(r2), raw = Math.atan2(y, x) * R2D, theta = norm360(raw);
+    const sq = Number.isInteger(r) ? String(r) : `√${r2} ≈ ${r.toFixed(3)}`;
+    let thStep;
+    if (x === 0) {
+      thStep = `x = 0 จุดอยู่บนแกน y ${y > 0 ? 'บวก จึงได้ θ = 90°' : 'ลบ จึงได้ θ = 270°'}`;
+    } else {
+      const base = Math.atan(y / x) * R2D;
+      let fix = '';
+      if (x < 0) fix = ` แต่ x < 0 (จตุภาคที่ ${y >= 0 ? 2 : 3}) จึงต้องบวก 180° → θ ≈ ${theta.toFixed(1)}°`;
+      else if (y < 0) fix = ` ซึ่งติดลบ (จตุภาคที่ 4) จึงบวก 360° → θ ≈ ${theta.toFixed(1)}°`;
+      thStep = `θ = atan2(y, x) = atan2(${fint(y)}, ${fint(x)}): tan⁻¹(${fint(y)}/${fint(x)}) ≈ ${fmt(base)}°${fix}`;
+    }
+    return {
+      theta, phi, P: { x, y, z },
+      prompt: `ดาวอยู่ในทิศของจุด P = (${fint(x)}, ${fint(y)}, ${fint(z)})`,
+      sub: 'ค่าบนจอแสดงแค่ (θ, φ) — ต้องแปลงเองด้วย atan2 และ arccos',
+      answer: `θ ≈ ${theta.toFixed(1)}°, φ ≈ ${phi.toFixed(1)}°`,
+      steps: [
+        `r = √(x² + y² + z²) = √(${par(x)}² + ${par(y)}² + ${par(z)}²) = ${Number.isInteger(r) ? r : sq}`,
+        thStep + (x !== 0 && x > 0 && y >= 0 ? ` → θ ≈ ${theta.toFixed(1)}°` : ''),
+        `φ = arccos(z / r) = arccos(${fint(z)} / ${Number.isInteger(r) ? r : '√' + r2}) ≈ arccos(${fmt(z / r, 3)}) ≈ ${phi.toFixed(1)}°`,
+        `เล็งไปที่ (θ, φ) ≈ (${theta.toFixed(1)}°, ${phi.toFixed(1)}°)`,
+      ],
+    };
+  }
+
+  const L3_THETA = [0, 30, 45, 60, 90, 120, 135, 150, 180, 210, 225, 240, 270, 300, 315, 330];
+  const L3_PHI = [30, 45, 60, 90, 120, 135, 150];
+  function genL3() {
+    const r = randInt(2, 6), theta = pick(L3_THETA), phi = pick(L3_PHI);
+    const v = sph2vec(theta, phi);
+    const X = r * v.x, Y = r * v.y, Z = r * v.z;
+    const tS = fracPi(theta), pS = fracPi(phi);
+    return {
+      theta, phi, r,
+      prompt: `ดาวอยู่ที่ (r, θ, φ) = (${r}, ${tS}, ${pS})`,
+      sub: `ค่าบนจอแสดง (x, y, z) ของจุดที่ห่าง r = ${r} ตามแนวเล็ง`,
+      answer: `(x, y, z) ≈ (${fmt(X, 2)}, ${fmt(Y, 2)}, ${fmt(Z, 2)})`,
+      steps: [
+        `แปลงเป็นองศา: θ = ${tS} = ${theta}°, φ = ${pS} = ${phi}°`,
+        `x = r sin φ cos θ = ${r} · sin(${pS}) · cos(${tS}) = ${r} · ${wrapP(sinExact(phi))} · ${wrapP(cosExact(theta))} ≈ ${fmt(X, 2)}`,
+        `y = r sin φ sin θ = ${r} · sin(${pS}) · sin(${tS}) = ${r} · ${wrapP(sinExact(phi))} · ${wrapP(sinExact(theta))} ≈ ${fmt(Y, 2)}`,
+        `z = r cos φ = ${r} · cos(${pS}) = ${r} · ${wrapP(cosExact(phi))} ≈ ${fmt(Z, 2)}`,
+        `เล็งจนค่าบนจอ (x, y, z) ≈ (${fmt(X, 2)}, ${fmt(Y, 2)}, ${fmt(Z, 2)})`,
+      ],
+    };
+  }
+
+  /** สร้างโจทย์โดยไม่ให้ใกล้ทิศที่เล็งอยู่หรือดาวที่มีอยู่แล้วเกินไป */
+  function makeQuestion(levelIdx) {
+    const aim = aimVec();
+    let q;
+    for (let tries = 0; tries < 300; tries++) {
+      q = LEVELS[levelIdx].gen();
+      q.vec = sph2vec(q.theta, q.phi);
+      if (angBetween(q.vec, aim) < 35) continue;
+      if (S.foundVecs.some((f) => angBetween(f, q.vec) < 20)) continue;
+      break;
+    }
+    q.level = levelIdx;
+    q.tol = LEVELS[levelIdx].tol;
+    return q;
+  }
+
+  // =====================================================================
+  //  สถานะเกม
+  // =====================================================================
+  const DWELL_SEC = 1.0, HINT_PENALTY = 40, MAX_BONUS = 60, REVEAL_SEC = 15;
+  const S = {
+    phase: 'lobby', // lobby | play | reveal | end
+    theta: 30, phi: 80, // ทิศที่กล้องหัน (องศา)
+    qi: 0, q: null, score: 0, qStart: 0, hintUsed: false, dwell: 0,
+    results: [], foundVecs: [], revealAt: 0, autoAim: null,
+  };
+  const aimVec = () => sph2vec(S.theta, S.phi);
+  window.__sky = { get state() { return { phase: S.phase, theta: norm360(S.theta), phi: S.phi, qi: S.qi, score: S.score, dwell: S.dwell, q: S.q && { theta: S.q.theta, phi: S.q.phi, level: S.q.level, tol: S.q.tol }, results: S.results.slice(), phones: phones.size }; } };
+
+  function startGame() {
+    clearConstellation();
+    Object.assign(S, { qi: 0, score: 0, results: [], foundVecs: [] });
+    $('lobby').classList.add('hidden');
+    $('endScreen').classList.add('hidden');
+    startQuestion();
+  }
+
+  function startQuestion() {
+    const lvl = Math.floor(S.qi / PER_LEVEL);
+    S.q = makeQuestion(lvl);
+    Object.assign(S, { phase: 'play', qStart: performance.now(), hintUsed: false, dwell: 0, autoAim: null });
+    hintSprite.visible = false;
+    $('hintDist').classList.add('hidden');
+    $('solution').classList.add('hidden');
+    if (S.qi % PER_LEVEL === 0) showBanner(LEVELS[lvl].name);
+    renderCard();
+    emitGame(targetPayload());
+  }
+
+  function targetPayload() {
+    const q = S.q;
+    return { type: 'target', qNo: S.qi + 1, total: TOTAL_Q, level: q.level + 1, levelName: LEVELS[q.level].name, prompt: q.prompt, sub: q.sub, tol: q.tol };
+  }
+
+  function onHit() {
+    const q = S.q, elapsed = (performance.now() - S.qStart) / 1000;
+    const bonus = Math.max(0, Math.round(MAX_BONUS - elapsed));
+    const penalty = S.hintUsed ? HINT_PENALTY : 0;
+    const pts = 100 + bonus - penalty;
+    S.score += pts;
+    S.results.push({ q, found: true, pts, bonus, penalty, elapsed });
+    addFoundStar(q, true, S.qi + 1);
+    enterReveal(true, `+${pts} คะแนน = 100 + โบนัสเวลา ${bonus}${penalty ? ` − คำใบ้ ${penalty}` : ''} (ใช้เวลา ${elapsed.toFixed(1)} วิ)`);
+    emitGame({ type: 'hit', qNo: S.qi + 1, points: pts, score: S.score, answer: q.answer });
+  }
+
+  function onSkip() {
+    if (S.phase !== 'play') return;
+    const q = S.q;
+    S.results.push({ q, found: false, pts: 0, bonus: 0, penalty: 0 });
+    addFoundStar(q, false, S.qi + 1);
+    // หมุนกล้องไปหาดาวเพื่อเฉลย
+    let dT = norm360(q.theta - S.theta); if (dT > 180) dT -= 360;
+    S.autoAim = { t0: performance.now(), dur: 1200, fromT: S.theta, fromP: S.phi, dT, toP: clamp(q.phi, 4, 176) };
+    enterReveal(false, 'ข้ามข้อนี้ — ได้ 0 คะแนน');
+    emitGame({ type: 'skip', qNo: S.qi + 1, score: S.score, answer: q.answer });
+  }
+
+  function enterReveal(found, ptsText) {
+    S.phase = 'reveal';
+    S.dwell = 0;
+    S.revealAt = performance.now();
+    hintSprite.visible = false;
+    $('hintDist').classList.add('hidden');
+    $('solTitle').textContent = found ? `🌟 ค้นพบดาวดวงที่ ${S.qi + 1}!` : `⏭ เฉลยข้อ ${S.qi + 1}`;
+    $('solTitle').className = found ? 'ok' : 'skip';
+    $('solPts').textContent = ptsText;
+    $('solSteps').innerHTML = '';
+    const head = document.createElement('li');
+    head.innerHTML = `<b>โจทย์:</b> ${S.q.prompt}`;
+    $('solSteps').appendChild(head);
+    for (const s of S.q.steps) { const li = document.createElement('li'); li.textContent = s; $('solSteps').appendChild(li); }
+    $('nextBtn').textContent = S.qi + 1 >= TOTAL_Q ? 'ดูผลรวม ▶' : 'ข้อต่อไป ▶';
+    $('solution').classList.remove('hidden');
+    renderStats();
+  }
+
+  function nextQuestion() {
+    if (S.phase !== 'reveal') return;
+    S.qi++;
+    if (S.qi >= TOTAL_Q) endGame(); else startQuestion();
+  }
+
+  function endGame() {
+    S.phase = 'end';
+    $('solution').classList.add('hidden');
+    $('endTotal').textContent = S.score;
+    const tb = $('endRows'); tb.innerHTML = '';
+    S.results.forEach((r, i) => {
+      const tr = document.createElement('tr');
+      for (const [txt, cls] of [[i + 1], [r.q.level + 1], [r.q.prompt.replace(/^ดาวอยู่(ที่|ในทิศของจุด)\s*/, '')], [r.found ? '🌟 เจอ' : '⏭ ข้าม'], [r.pts, 'num']]) {
+        const td = document.createElement('td'); td.textContent = txt; if (cls) td.className = cls; tr.appendChild(td);
+      }
+      tb.appendChild(tr);
+    });
+    $('endScreen').classList.remove('hidden');
+    renderCard();
+    emitGame({ type: 'end', score: S.score, found: S.results.filter((r) => r.found).length, total: TOTAL_Q });
+  }
+
+  function useHint() {
+    if (S.phase !== 'play') return;
+    if (!S.hintUsed) { S.hintUsed = true; toast(`💡 ใช้คำใบ้ −${HINT_PENALTY} คะแนน`); }
+    hintSprite.position.copy(toThree(S.q.vec, R_FOUND));
+    hintSprite.visible = true;
+    $('hintDist').classList.remove('hidden');
+  }
+
+
+  function handleAction(name) {
+    if (name === 'start') {
+      if (S.phase === 'lobby' || S.phase === 'end') startGame();
+      else if (S.phase === 'reveal') nextQuestion();
+    } else if (name === 'hint') useHint();
+    else if (name === 'skip') onSkip();
+  }
+
+  // =====================================================================
+  //  HUD
+  // =====================================================================
+  let bannerTimer = 0;
+  function showBanner(text, ms = 2200) {
+    const b = $('banner'); b.textContent = text; b.classList.add('show');
+    clearTimeout(bannerTimer); bannerTimer = setTimeout(() => b.classList.remove('show'), ms);
+  }
+  const toast = (t) => showBanner(t, 1400);
+
+  function renderCard() {
+    if (S.phase === 'play' || S.phase === 'reveal') {
+      const q = S.q;
+      $('qLevel').textContent = `${LEVELS[q.level].name} · ข้อ ${S.qi + 1}/${TOTAL_Q}`;
+      $('qPrompt').textContent = q.prompt;
+      $('qSub').textContent = `${q.sub} · ยอมคลาดเคลื่อนได้ ${q.tol}° · ค้างเป้า ${DWELL_SEC} วิ`;
+    } else {
+      $('qLevel').textContent = 'Sky Aim';
+      $('qPrompt').textContent = S.phase === 'end' ? `จบเกม — คะแนนรวม ${S.score}` : 'หันกล้องสำรวจท้องฟ้าได้เลย';
+      $('qSub').textContent = 'ลากเมาส์ / ปุ่มลูกศร / เอียงมือถือ';
+    }
+    renderStats();
+  }
+
+  function renderStats() {
+    $('hudScore').textContent = S.score;
+    const inQ = S.phase === 'play' || S.phase === 'reveal';
+    $('hudQ').textContent = inQ ? `${S.qi + 1} / ${TOTAL_Q}` : '–';
+    $('hudLevel').textContent = inQ ? `${S.q.level + 1} / ${LEVELS.length}` : '–';
+  }
+
+  function updateHud(now) {
+    const th = norm360(S.theta), ph = S.phi;
+    const kind = S.q && S.phase !== 'lobby' && S.phase !== 'end' ? LEVELS[S.q.level].readout : 'both';
+    let html;
+    if (kind === 'xyz') {
+      const r = S.q.r, v = aimVec();
+      html = `<span class="k">ค่าที่เล็งอยู่ (r = ${r})</span><br>(x, y, z) = (${fmt(r * v.x, 2)}, ${fmt(r * v.y, 2)}, ${fmt(r * v.z, 2)})`;
+    } else if (kind === 'angles') {
+      html = `<span class="k">ทิศที่เล็งอยู่</span><br>θ = ${th.toFixed(1)}°, φ = ${ph.toFixed(1)}°`;
+    } else {
+      const v = aimVec();
+      html = `<span class="k">ทิศที่เล็งอยู่</span><br>θ = ${th.toFixed(1)}°, φ = ${ph.toFixed(1)}° · (x, y, z) = (${fmt(v.x, 2)}, ${fmt(v.y, 2)}, ${fmt(v.z, 2)})`;
+    }
+    $('readout').innerHTML = html;
+
+    if (S.phase === 'play') {
+      const el = (now - S.qStart) / 1000;
+      $('hudTime').textContent = el.toFixed(1);
+      $('hudBonus').textContent = `(โบนัส +${Math.max(0, Math.round(MAX_BONUS - el))})`;
+    } else if (S.phase !== 'reveal') {
+      $('hudTime').textContent = '0.0'; $('hudBonus').textContent = '';
+    }
+
+    if (S.phase === 'play' && S.hintUsed) {
+      $('hintDist').textContent = `💡 ห่างจากดาว ${angBetween(aimVec(), S.q.vec).toFixed(1)}°`;
+      hintSprite.material.opacity = 0.35 + 0.65 * Math.abs(Math.sin(now / 220));
+    }
+    // วงแหวนความคืบหน้าการค้างเป้า
+    const C = 2 * Math.PI * 34, f = clamp(S.dwell / DWELL_SEC, 0, 1);
+    $('dwellRing').setAttribute('stroke-dasharray', `${(f * C).toFixed(1)} ${C.toFixed(1)}`);
+
+    if (S.phase === 'reveal') {
+      const left = Math.max(0, REVEAL_SEC - (now - S.revealAt) / 1000);
+      $('solCountdown').textContent = `ไปต่ออัตโนมัติใน ${Math.ceil(left)} วิ`;
+      if (left <= 0) nextQuestion();
+    }
+    $('hintBtn').disabled = $('skipBtn').disabled = S.phase !== 'play';
+  }
+
+  // =====================================================================
+  //  การควบคุม: มือถือ (rate control), เมาส์, แป้นพิมพ์
+  // =====================================================================
+  const DEAD = 3, FULL = 27, BASE_RATE = 80, FINE_K = 0.25, MAX_NORM = 1.5, MAX_RATE = BASE_RATE * Math.pow(MAX_NORM, 1.6);
+  /** ความเร็ว (องศา/วินาที) = sign(t)·((|t|−3)/27)^1.6·80 พร้อม dead zone 3° และจำกัดค่าสูงสุด */
+  function tiltRate(t) {
+    const a = Math.abs(t);
+    if (a <= DEAD) return 0;
+    return Math.sign(t) * Math.pow(Math.min((a - DEAD) / FULL, MAX_NORM), 1.6) * BASE_RATE;
+  }
+
+  const phones = new Map(); // id -> {x, y, fine, t, el}
+  function ensurePhone(id) {
+    let p = phones.get(id);
+    if (!p) {
+      const el = document.createElement('div'); el.className = 'phone-ind stale'; el.innerHTML = '<i></i>';
+      $('phones').appendChild(el);
+      p = { x: 0, y: 0, fine: false, t: 0, el };
+      phones.set(id, p);
+    }
+    return p;
+  }
+  function syncPhones(ids) {
+    const set = new Set(ids);
+    for (const [id, p] of phones) if (!set.has(id)) { p.el.remove(); phones.delete(id); }
+    for (const id of ids) ensurePhone(id);
+    const n = phones.size;
+    $('phoneCount').textContent = `มือถือ ${n} เครื่อง`;
+    $('devStatus').innerHTML = n ? `📱 มือถือเชื่อมต่อแล้ว <b>${n}</b> เครื่อง` : '📱 ยังไม่มีมือถือเชื่อมต่อ (ใช้เมาส์/คีย์บอร์ดเล่นได้)';
+  }
+
+  const keys = {};
+  addEventListener('keydown', (e) => {
+    if (e.key.startsWith('Arrow')) { keys[e.key] = true; e.preventDefault(); }
+    keys.Shift = e.shiftKey;
+    if (e.repeat) return;
+    const k = e.key.toLowerCase();
+    if (k === 'h') useHint();
+    else if (k === 's') onSkip();
+    else if (k === 'f') toggleFormulas();
+    else if (e.key === 'Enter') handleAction('start');
+  });
+  addEventListener('keyup', (e) => { keys[e.key] = false; keys.Shift = e.shiftKey; });
+  addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+
+  let drag = null;
+  const cv = renderer.domElement;
+  cv.addEventListener('pointerdown', (e) => { drag = { x: e.clientX, y: e.clientY }; cv.setPointerCapture(e.pointerId); });
+  cv.addEventListener('pointermove', (e) => {
+    if (!drag || S.autoAim) return;
+    const k = camera.fov / innerHeight; // องศาต่อพิกเซล (โดยประมาณ)
+    S.theta += (e.clientX - drag.x) * k; // ลากแบบ "จับท้องฟ้า"
+    S.phi = clamp(S.phi + (e.clientY - drag.y) * k * -1, 4, 176);
+    drag = { x: e.clientX, y: e.clientY };
+  });
+  const endDrag = () => { drag = null; };
+  cv.addEventListener('pointerup', endDrag);
+  cv.addEventListener('pointercancel', endDrag);
+
+  function stepControls(dt, now) {
+    if (S.autoAim) {
+      const a = S.autoAim, t = clamp((now - a.t0) / a.dur, 0, 1), e = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+      S.theta = a.fromT + a.dT * e; S.phi = a.fromP + (a.toP - a.fromP) * e;
+      if (t >= 1) S.autoAim = null;
+      return;
+    }
+    let vT = 0, vP = 0;
+    for (const p of phones.values()) {
+      const fresh = now - p.t < 500;
+      p.el.classList.toggle('stale', !fresh);
+      p.el.classList.toggle('fine', p.fine);
+      p.el.firstChild.style.transform = `translate(${clamp(p.x / 30, -1, 1) * 18}px, ${clamp(-p.y / 30, -1, 1) * 18}px)`;
+      if (!fresh) continue;
+      const k = p.fine ? FINE_K : 1;
+      vT += -tiltRate(p.x) * k; // เอียงขวา → θ ลด (หันขวา)
+      vP += -tiltRate(p.y) * k; // เอียงเข้าหาตัว (y > 0) → φ ลด (เงยขึ้น)
+    }
+    const kr = keys.Shift ? 12 : 50;
+    if (keys.ArrowLeft) vT += kr;
+    if (keys.ArrowRight) vT -= kr;
+    if (keys.ArrowUp) vP -= kr;
+    if (keys.ArrowDown) vP += kr;
+    vT = clamp(vT, -MAX_RATE, MAX_RATE); vP = clamp(vP, -MAX_RATE, MAX_RATE);
+    S.theta += vT * dt;
+    S.phi = clamp(S.phi + vP * dt, 4, 176);
+  }
+
+  function stepGame(dt) {
+    if (S.phase !== 'play') return;
+    const err = angBetween(aimVec(), S.q.vec);
+    if (err <= S.q.tol) {
+      S.dwell += dt;
+      if (S.dwell >= DWELL_SEC) onHit();
+    } else {
+      S.dwell = Math.max(0, S.dwell - dt * 2);
+    }
+  }
+
+  // =====================================================================
+  //  วนลูปเรนเดอร์
+  // =====================================================================
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.1, (now - last) / 1000); last = now;
+    stepControls(dt, now);
+    stepGame(dt);
+    camera.lookAt(toThree(aimVec(), 10));
+    for (const o of constellation.children) {
+      if (o.isSprite && o.userData.base) {
+        const age = (now - o.userData.born) / 1000, pop = age < 0.6 ? 1 + 1.8 * (1 - age / 0.6) : 1;
+        const tw = 1 + 0.08 * Math.sin(now / 300 + o.id);
+        o.scale.setScalar(o.userData.base * pop * tw);
+      }
+    }
+    updateHud(now);
+    renderer.render(scene, camera);
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+
+  addEventListener('resize', () => {
+    camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix();
+    renderer.setSize(innerWidth, innerHeight);
+  });
+
+  function toggleFormulas() { $('formulas').classList.toggle('hidden'); }
+  $('formulaBtn').onclick = toggleFormulas;
+  $('hintBtn').onclick = useHint;
+  $('skipBtn').onclick = onSkip;
+  $('nextBtn').onclick = nextQuestion;
+  $('startBtn').onclick = startGame;
+  $('againBtn').onclick = startGame;
+
+  // =====================================================================
+  //  Socket.IO — ห้อง + QR
+  // =====================================================================
+  const socket = io();
+  let room = null;
+  try { room = sessionStorage.getItem('skyaim-room'); } catch (_) {}
+  let lastCached = null;
+
+  function lobbyPayload() { return { type: 'lobby', room }; }
+  function emitGame(p) {
+    if (p.type === 'lobby' || p.type === 'target' || p.type === 'end') lastCached = p;
+    if (socket.connected && room) socket.emit('game', p);
+  }
+
+  function showRoom() {
+    $('roomBig').textContent = room; $('roomSmall').textContent = room;
+    const url = `${location.origin}/client.html?room=${room}`;
+    $('joinUrl').textContent = url;
+    const qr = $('qr'); qr.innerHTML = '';
+    if (window.QRCode) new QRCode(qr, { text: url, width: 220, height: 220, correctLevel: QRCode.CorrectLevel.M });
+    else qr.textContent = 'โหลดไลบรารี QR ไม่สำเร็จ';
+  }
+
+  socket.on('connect', () => {
+    $('conn').textContent = 'เชื่อมต่อ server แล้ว'; $('conn').className = 'muted';
+    socket.emit('host:create', { room }, (res) => {
+      if (!res || !res.ok) { $('conn').textContent = 'สร้างห้องไม่สำเร็จ'; $('conn').className = 'bad'; return; }
+      room = res.room;
+      try { sessionStorage.setItem('skyaim-room', room); } catch (_) {}
+      showRoom();
+      syncPhones([]);
+      // ส่งสถานะปัจจุบันให้มือถือ (กรณี host เชื่อมต่อใหม่)
+      if (S.phase === 'lobby') emitGame(lobbyPayload());
+      else if (lastCached) emitGame(lastCached.type === 'lobby' ? lobbyPayload() : lastCached);
+    });
+  });
+  socket.on('disconnect', () => { $('conn').textContent = '⚠️ หลุดจาก server — กำลังเชื่อมต่อใหม่…'; $('conn').className = 'bad'; });
+  socket.on('clients', (d) => syncPhones(d.ids || []));
+  socket.on('tilt', (d) => {
+    const p = ensurePhone(d.id);
+    p.x = d.x; p.y = d.y; p.fine = !!d.fine; p.t = performance.now();
+  });
+  socket.on('action', (d) => handleAction(d.name));
+
+  if (['localhost', '127.0.0.1', '::1', '[::1]'].includes(location.hostname)) $('localWarn').classList.remove('hidden');
+  renderCard();
+  </script>
+</body>
+</html>

@@ -1,0 +1,325 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta name="theme-color" content="#050a18">
+  <title>Sky Aim — จอย</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body class="client-body">
+  <div class="client-wrap">
+    <!-- 1. เข้าห้อง -->
+    <section id="joinView">
+      <h1>📱 จอย Sky Aim</h1>
+      <form class="panel join-card" id="joinForm">
+        <label for="codeInput" class="muted">กรอกรหัสห้อง 4 หลักจากจอ Host</label>
+        <input id="codeInput" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="off" placeholder="0000">
+        <button class="btn primary" style="font-size:22px;padding:14px" type="submit">เข้าห้อง</button>
+        <div id="joinMsg" class="msg info hidden"></div>
+      </form>
+    </section>
+
+    <!-- 2. จอย -->
+    <section id="padView" class="hidden" style="display:flex;flex-direction:column;gap:12px">
+      <div class="topbar">
+        <span><span class="dot" id="connDot"></span><span id="connText">กำลังเชื่อมต่อ…</span></span>
+        <span>ห้อง <span class="code" id="roomLabel">----</span></span>
+      </div>
+
+      <div class="panel" id="promptBox">
+        <div class="lvl" id="pLevel">รอจอ Host</div>
+        <div class="p" id="pText">กำลังรอเริ่มเกม…</div>
+      </div>
+
+      <button class="btn primary hidden" id="startBtn">▶ เริ่มเกม</button>
+
+      <div id="sensorArea" style="display:flex;flex-direction:column;gap:8px">
+        <button class="btn" id="sensorBtn" style="padding:14px;font-size:18px">🧭 เปิดใช้เซนเซอร์</button>
+        <div id="sensorMsg" class="msg hidden"></div>
+      </div>
+
+      <div class="pads">
+        <div class="pad-box">
+          <div class="circle bubble" id="bubble">
+            <div class="cross-h"></div><div class="cross-v"></div>
+            <div class="ring" style="width:10%;height:10%"></div>
+            <div class="ring" style="width:66%;height:66%"></div>
+            <div class="knob" id="bubbleKnob"></div>
+          </div>
+          <span>ระดับน้ำ (การเอียงที่ส่ง)</span>
+          <span class="vals mono" id="vals">x 0.0° · y 0.0°</span>
+        </div>
+        <div class="pad-box">
+          <div class="circle" id="pad">
+            <div class="cross-h"></div><div class="cross-v"></div>
+            <div class="ring" style="width:10%;height:10%"></div>
+            <div class="knob" id="padKnob"></div>
+          </div>
+          <span>ทัชแพด (ลากนิ้ว ±30°)</span>
+          <span class="vals" id="srcText">แหล่งข้อมูล: ทัชแพด</span>
+        </div>
+      </div>
+
+      <button class="btn" id="fineBtn">🎯 กดค้าง = เล็งละเอียด</button>
+
+      <div class="btn-row">
+        <button class="btn" id="zeroBtn">⊙ ตั้งศูนย์</button>
+        <button class="btn" id="hintBtn">💡 คำใบ้</button>
+        <button class="btn warn" id="skipBtn">⏭ ข้าม</button>
+      </div>
+
+      <div class="opts">
+        <label><input type="checkbox" id="invX"> สลับทิศแกน X</label>
+        <label><input type="checkbox" id="invY"> สลับทิศแกน Y</label>
+      </div>
+      <p class="muted" style="font-size:13px;line-height:1.6;margin:0">
+        เอียงขวา → หันขวา · เอียงเครื่องเข้าหาตัว → เงยขึ้น · ยิ่งเอียงมากยิ่งหมุนเร็ว (เอียงไม่เกิน 3° ภาพจะหยุดนิ่ง)
+        ค้างเป้าไว้ที่ดาว 1 วินาทีเพื่อค้นพบ
+      </p>
+    </section>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script>
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  const R2D = 180 / Math.PI;
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const wrap180 = (a) => { a = ((a + 180) % 360 + 360) % 360 - 180; return a; };
+  const PAD_MAX = 30;
+
+  // ---------------- ตั้งค่าที่จำไว้ในเครื่อง ----------------
+  function load(k, d) { try { const v = localStorage.getItem(k); return v === null ? d : JSON.parse(v); } catch (_) { return d; } }
+  function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) {} }
+  $('invX').checked = load('skyaim-invX', false);
+  $('invY').checked = load('skyaim-invY', false);
+  $('invX').onchange = () => save('skyaim-invX', $('invX').checked);
+  $('invY').onchange = () => save('skyaim-invY', $('invY').checked);
+
+  // ---------------- ห้อง / Socket.IO ----------------
+  const socket = io();
+  let room = null, joined = false, joining = false;
+
+  function setConn(ok, text) { $('connDot').classList.toggle('on', ok); $('connText').textContent = text; }
+  function joinMsg(text, kind = 'info') { const m = $('joinMsg'); m.textContent = text; m.className = 'msg ' + kind; }
+
+  function tryJoin() {
+    if (!room || joining || !socket.connected) return;
+    joining = true;
+    socket.emit('client:join', { room }, (res) => {
+      joining = false;
+      if (res && res.ok) {
+        joined = true;
+        $('joinView').classList.add('hidden');
+        $('padView').classList.remove('hidden');
+        $('roomLabel').textContent = room;
+        setConn(true, 'เชื่อมต่อแล้ว');
+        try { history.replaceState(null, '', `?room=${room}`); } catch (_) {}
+      } else {
+        joined = false;
+        const why = res && res.error === 'not-found' ? `ไม่พบห้อง ${room} (หรือจอ Host ยังไม่เปิด)` : 'รหัสห้องไม่ถูกต้อง';
+        if ($('padView').classList.contains('hidden')) joinMsg(`${why} — จะลองใหม่อัตโนมัติทุก 2 วินาที`, 'err');
+        else setConn(false, `${why} — กำลังลองใหม่…`);
+      }
+    });
+  }
+  // พยายามเข้าห้องใหม่อัตโนมัติทุก 2 วินาที
+  setInterval(() => { if (!joined) tryJoin(); }, 2000);
+
+  socket.on('connect', () => { joined = false; joining = false; tryJoin(); });
+  socket.on('disconnect', () => { joined = false; joining = false; setConn(false, 'หลุดจาก server — กำลังเชื่อมต่อใหม่…'); });
+  socket.on('host-left', () => {
+    joined = false;
+    setConn(false, 'จอ Host หลุดการเชื่อมต่อ — กำลังรอ…');
+    $('pLevel').textContent = 'จอ Host หลุด';
+    $('pText').textContent = 'รอจอ Host กลับมา (ระบบจะเข้าห้องเดิมให้อัตโนมัติ)';
+    $('startBtn').classList.add('hidden');
+  });
+
+  $('joinForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const code = $('codeInput').value.replace(/\D/g, '');
+    if (code.length !== 4) { joinMsg('กรุณากรอกรหัส 4 หลัก', 'err'); return; }
+    room = code; joined = false;
+    joinMsg('กำลังเข้าห้อง…');
+    requestWakeLock();
+    tryJoin();
+  });
+  $('codeInput').addEventListener('input', (e) => { e.target.value = e.target.value.replace(/\D/g, '').slice(0, 4); });
+
+  const preset = new URLSearchParams(location.search).get('room');
+  if (preset && /^\d{4}$/.test(preset)) { $('codeInput').value = preset; room = preset; joinMsg('กำลังเข้าห้อง…'); tryJoin(); }
+
+  // ---------------- เหตุการณ์จาก host ----------------
+  function showStart(label) {
+    const b = $('startBtn');
+    if (label) { b.textContent = label; b.classList.remove('hidden'); } else b.classList.add('hidden');
+  }
+  socket.on('game', (g) => {
+    switch (g.type) {
+      case 'lobby':
+        $('pLevel').textContent = `ห้อง ${g.room} · ล็อบบี้`;
+        $('pText').textContent = 'พร้อมแล้วกด “เริ่มเกม” ได้เลย';
+        showStart('▶ เริ่มเกม');
+        break;
+      case 'target':
+        $('pLevel').textContent = `${g.levelName} · ข้อ ${g.qNo}/${g.total}`;
+        $('pText').textContent = g.prompt;
+        showStart(null);
+        break;
+      case 'hit':
+        $('pLevel').textContent = `ข้อ ${g.qNo} · คะแนนรวม ${g.score}`;
+        $('pText').textContent = `🌟 เจอดาวแล้ว! +${g.points} คะแนน`;
+        showStart('ข้อต่อไป ▶');
+        if (navigator.vibrate) navigator.vibrate([60, 40, 160]);
+        break;
+      case 'skip':
+        $('pLevel').textContent = `ข้อ ${g.qNo} · เฉลย`;
+        $('pText').textContent = `⏭ เฉลย: ${g.answer}`;
+        showStart('ข้อต่อไป ▶');
+        break;
+      case 'end':
+        $('pLevel').textContent = 'จบเกม';
+        $('pText').textContent = `🌌 คะแนนรวม ${g.score} (เจอ ${g.found}/${g.total} ดวง)`;
+        showStart('🔄 เล่นใหม่');
+        break;
+    }
+  });
+
+  const action = (name) => { if (joined) socket.emit('action', { name }); };
+  $('startBtn').onclick = () => action('start');
+  $('hintBtn').onclick = () => action('hint');
+  $('skipBtn').onclick = () => action('skip');
+
+  // ---------------- เซนเซอร์ ----------------
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  let g = null, roll = 0, pitch = 0, baseRoll = 0, basePitch = 0, needZero = true;
+  let sensorOn = false, sensorData = false, sensorListening = false;
+
+  function sensorMsg(text, kind) { const m = $('sensorMsg'); m.textContent = text; m.className = 'msg ' + kind; if (!text) m.classList.add('hidden'); }
+
+  function onMotion(e) {
+    const a = e.accelerationIncludingGravity;
+    if (!a || a.x == null || a.y == null || a.z == null) return;
+    let v = [a.x, a.y, a.z];
+    if (isIOS) v = v.map((n) => -n); // iOS รายงานเครื่องหมายกลับด้าน
+    g = g ? g.map((o, i) => 0.8 * o + 0.2 * v[i]) : v; // low-pass filter
+    const m = Math.hypot(g[0], g[1], g[2]);
+    if (m < 1e-3) return;
+    roll = Math.asin(clamp(-g[0] / m, -1, 1)) * R2D;
+    pitch = Math.atan2(-g[1], g[2]) * R2D;
+    if (!sensorData) { sensorData = true; sensorOn = true; sensorMsg('✅ เซนเซอร์ทำงานแล้ว — ถือมือถือท่าที่สบาย ระบบตั้งศูนย์ให้อัตโนมัติ', 'ok'); setTimeout(() => sensorMsg('', ''), 3000); $('sensorBtn').textContent = '🧭 เซนเซอร์: เปิดอยู่'; }
+    if (needZero) { baseRoll = roll; basePitch = pitch; needZero = false; }
+  }
+
+  $('sensorBtn').addEventListener('click', async () => {
+    requestWakeLock();
+    if (!('DeviceMotionEvent' in window)) {
+      sensorMsg('❌ เบราว์เซอร์นี้ไม่รองรับเซนเซอร์การเคลื่อนไหว — ใช้ทัชแพดด้านล่างแทนได้', 'err');
+      return;
+    }
+    // iOS 13+: ต้องเรียก requestPermission() ภายใน click handler โดยตรง
+    if (typeof DeviceMotionEvent.requestPermission === 'function') {
+      try {
+        const res = await DeviceMotionEvent.requestPermission();
+        if (res !== 'granted') {
+          sensorMsg('❌ ไม่ได้รับอนุญาตให้ใช้เซนเซอร์ — ปิดแท็บแล้วเปิดลิงก์ใหม่เพื่อกด “อนุญาต” อีกครั้ง (หรือ Settings › Safari › Motion & Orientation Access) ระหว่างนี้ใช้ทัชแพดแทนได้', 'err');
+          return;
+        }
+      } catch (err) {
+        sensorMsg('❌ ขออนุญาตใช้เซนเซอร์ไม่สำเร็จ: ' + (err && err.message ? err.message : err) + ' — ต้องเปิดหน้านี้ผ่าน HTTPS และกดปุ่มด้วยนิ้วโดยตรง', 'err');
+        return;
+      }
+    }
+    needZero = true; g = null;
+    if (!sensorListening) { window.addEventListener('devicemotion', onMotion); sensorListening = true; }
+    sensorMsg('กำลังรอข้อมูลเซนเซอร์…', 'info');
+    setTimeout(() => {
+      if (sensorData) return;
+      const why = window.isSecureContext
+        ? 'อุปกรณ์นี้อาจไม่มีเซนเซอร์ (เช่น คอมพิวเตอร์) หรือเบราว์เซอร์บล็อกไว้'
+        : 'หน้านี้ไม่ได้เปิดผ่าน HTTPS เบราว์เซอร์จึงไม่ส่งค่าเซนเซอร์ให้ — ให้เปิดผ่าน URL https:// ที่ deploy แล้ว';
+      sensorMsg(`❌ ไม่ได้รับข้อมูลเซนเซอร์ภายใน 1.5 วินาที: ${why} ระหว่างนี้ใช้ทัชแพดด้านล่างแทนได้`, 'err');
+    }, 1500);
+  });
+
+  $('zeroBtn').onclick = () => {
+    if (sensorData) { baseRoll = roll; basePitch = pitch; }
+    if (navigator.vibrate) navigator.vibrate(30);
+  };
+
+  // ---------------- ทัชแพดสำรอง ----------------
+  const pad = $('pad');
+  let padActive = false, padX = 0, padY = 0;
+  function padFrom(e) {
+    const r = pad.getBoundingClientRect();
+    let dx = (e.clientX - (r.left + r.width / 2)) / (r.width / 2);
+    let dy = (e.clientY - (r.top + r.height / 2)) / (r.height / 2);
+    const len = Math.hypot(dx, dy);
+    if (len > 1) { dx /= len; dy /= len; }
+    padX = dx * PAD_MAX;
+    padY = -dy * PAD_MAX; // ลากขึ้น = y บวก (เงยขึ้น)
+  }
+  pad.addEventListener('pointerdown', (e) => { padActive = true; pad.setPointerCapture(e.pointerId); pad.classList.add('active'); padFrom(e); e.preventDefault(); });
+  pad.addEventListener('pointermove', (e) => { if (padActive) padFrom(e); });
+  const padEnd = () => { padActive = false; padX = padY = 0; pad.classList.remove('active'); };
+  pad.addEventListener('pointerup', padEnd);
+  pad.addEventListener('pointercancel', padEnd);
+
+  // ---------------- ปุ่มเล็งละเอียด (กดค้าง) ----------------
+  let fine = false;
+  const fineBtn = $('fineBtn');
+  const fineOn = (e) => { fine = true; fineBtn.classList.add('on'); try { fineBtn.setPointerCapture(e.pointerId); } catch (_) {} e.preventDefault(); };
+  const fineOff = () => { fine = false; fineBtn.classList.remove('on'); };
+  fineBtn.addEventListener('pointerdown', fineOn);
+  fineBtn.addEventListener('pointerup', fineOff);
+  fineBtn.addEventListener('pointercancel', fineOff);
+  fineBtn.addEventListener('lostpointercapture', fineOff);
+  fineBtn.addEventListener('contextmenu', (e) => e.preventDefault());
+
+  // ---------------- ค่าที่ส่ง ~30 ครั้ง/วินาที ----------------
+  function currentTilt() {
+    let x, y, src;
+    if (padActive || !sensorOn) {
+      x = padX; y = padY; src = 'ทัชแพด';
+    } else {
+      x = wrap180(roll - baseRoll);
+      y = -wrap180(pitch - basePitch);
+      src = 'เซนเซอร์';
+    }
+    if ($('invX').checked) x = -x;
+    if ($('invY').checked) y = -y;
+    return { x: wrap180(x), y: wrap180(y), src };
+  }
+
+  const knob = $('padKnob'), bub = $('bubbleKnob');
+  setInterval(() => {
+    const t = currentTilt();
+    if (joined) socket.volatile.emit('tilt', { x: +t.x.toFixed(2), y: +t.y.toFixed(2), fine });
+    // วาดระดับน้ำและทัชแพด
+    const bx = clamp(t.x / PAD_MAX, -1, 1), by = clamp(-t.y / PAD_MAX, -1, 1);
+    const bl = Math.hypot(bx, by), s = bl > 1 ? 1 / bl : 1;
+    bub.style.left = 50 + bx * s * 41 + '%';
+    bub.style.top = 50 + by * s * 41 + '%';
+    knob.style.left = 50 + (padX / PAD_MAX) * 37 + '%';
+    knob.style.top = 50 - (padY / PAD_MAX) * 37 + '%';
+    $('vals').textContent = `x ${t.x.toFixed(1)}° · y ${t.y.toFixed(1)}°`;
+    $('srcText').textContent = 'แหล่งข้อมูล: ' + t.src + (fine ? ' · ละเอียด' : '');
+  }, 33);
+
+  // ---------------- Screen Wake Lock ----------------
+  let wakeLock = null;
+  async function requestWakeLock() {
+    try {
+      if ('wakeLock' in navigator && !wakeLock) {
+        wakeLock = await navigator.wakeLock.request('screen');
+        wakeLock.addEventListener('release', () => { wakeLock = null; });
+      }
+    } catch (_) { /* ไม่รองรับหรือไม่ได้รับอนุญาต — ไม่เป็นไร */ }
+  }
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') requestWakeLock(); });
+  document.addEventListener('pointerdown', requestWakeLock, { once: true });
+  </script>
+</body>
+</html>
